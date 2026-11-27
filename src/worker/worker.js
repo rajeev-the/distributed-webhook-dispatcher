@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import { queueService } from '../services/queue.js';
 import { rateLimiter } from '../services/rateLimiter.js';
 import { deliverWebhook, classifyDeliveryOutcome, calculateBackoffMs } from '../services/dispatcher.js';
+import { logger } from '../services/logger.js';
 
 export class WebhookWorker {
   constructor() {
@@ -14,7 +15,7 @@ export class WebhookWorker {
   start() {
     if (this.isRunning) return;
     this.isRunning = true;
-    console.log('[Worker] 🚀 Background delivery worker started.');
+    logger.addLog('Worker', '🚀 Background delivery worker started.');
     this.scheduleNextPoll(100);
   }
 
@@ -24,7 +25,7 @@ export class WebhookWorker {
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
-    console.log('[Worker] Stopped claiming new jobs. Waiting for in-flight deliveries to complete...');
+    logger.addLog('Worker', 'Stopped claiming new jobs.');
   }
 
   scheduleNextPoll(delayMs = config.workerIntervalMs) {
@@ -42,14 +43,14 @@ export class WebhookWorker {
         this.lastRecoveryCheck = now;
         const recovered = await queueService.recoverStuckJobs(config.visibilityTimeoutSeconds);
         if (recovered.length > 0) {
-          console.warn(`[Worker] ⚠️ Visibility timeout: reclaimed ${recovered.length} stuck jobs.`);
+          logger.addLog('Worker', `⚠️ Visibility timeout: reclaimed ${recovered.length} stuck jobs.`, 'warn');
         }
       }
 
       // 2. Claim due jobs with FOR UPDATE SKIP LOCKED
       const jobs = await queueService.claimJobs(config.workerBatchSize);
       if (jobs.length > 0) {
-        console.log(`[Worker] Claimed ${jobs.length} due job(s) for delivery.`);
+        logger.addLog('Worker', `Claimed ${jobs.length} due job(s) for delivery.`);
         for (const job of jobs) {
           // Process concurrently within node's event loop
           const dispatchPromise = this.processJob(job);
@@ -58,7 +59,7 @@ export class WebhookWorker {
         }
       }
     } catch (err) {
-      console.error('[Worker Tick Error]', err.message);
+      logger.addLog('Worker', `Tick Error: ${err.message}`, 'error');
     } finally {
       this.scheduleNextPoll();
     }
@@ -71,13 +72,13 @@ export class WebhookWorker {
     const permission = rateLimiter.tryAcquire(host);
     if (!permission.allowed) {
       const delayMs = permission.retryAfterMs || 500;
-      console.log(`[Worker] ⏳ Rate limit reached for ${host}. Rescheduling job ${job.id} in ${delayMs}ms.`);
+      logger.addLog('Worker', `⏳ Rate limit reached for ${host}. Rescheduling job ${job.id} in ${delayMs}ms.`);
       await queueService.rescheduleJob(job.id, delayMs);
       return;
     }
 
     const currentAttempt = job.attempt_count + 1;
-    console.log(`[Worker] 🚀 Attempt ${currentAttempt}/${job.max_attempts} for job ${job.id} (Event: '${job.event_id}') -> ${job.destination_url}`);
+    logger.addLog('Worker', `🚀 Attempt ${currentAttempt}/${job.max_attempts} for job ${job.id} (Event: '${job.event_id}') -> ${job.destination_url}`);
 
     try {
       // Perform webhook HTTP dispatch
@@ -102,12 +103,12 @@ export class WebhookWorker {
       if (outcome.status === 'retrying') {
         backoffMs = calculateBackoffMs(currentAttempt, retryAfterHeader);
         nextAttemptAt = new Date(Date.now() + backoffMs);
-        console.log(`[Worker] 🔄 Job ${job.id} RETRYING in ${backoffMs}ms (HTTP ${responseCode || errorMessage}) [Attempt ${currentAttempt}/${job.max_attempts}]`);
+        logger.addLog('Worker', `🔄 Job ${job.id} RETRYING in ${backoffMs}ms (HTTP ${responseCode || errorMessage}) [Attempt ${currentAttempt}/${job.max_attempts}]`, 'warn');
       } else if (outcome.status === 'succeeded') {
         const preview = responseBody ? ` | Response: ${responseBody.slice(0, 160)}` : '';
-        console.log(`[Worker] ✅ Job ${job.id} SUCCEEDED (HTTP ${responseCode}) in ${durationMs}ms${preview}`);
+        logger.addLog('Worker', `✅ Job ${job.id} SUCCEEDED (HTTP ${responseCode}) in ${durationMs}ms${preview}`);
       } else {
-        console.log(`[Worker] ❌ Job ${job.id} FAILED PERMANENTLY (${outcome.reason}) in ${durationMs}ms`);
+        logger.addLog('Worker', `❌ Job ${job.id} FAILED PERMANENTLY (${outcome.reason}) in ${durationMs}ms`, 'error');
       }
 
       await queueService.recordAttemptOutcome({
@@ -120,7 +121,7 @@ export class WebhookWorker {
         nextAttemptAt
       });
     } catch (err) {
-      console.error(`[Worker] Unexpected delivery failure for job ${job.id}:`, err);
+      logger.addLog('Worker', `Unexpected delivery failure for job ${job.id}: ${err.message}`, 'error');
       const outcome = classifyDeliveryOutcome(null, err, currentAttempt, job.max_attempts);
       const nextAttemptAt = outcome.status === 'retrying'
         ? new Date(Date.now() + calculateBackoffMs(currentAttempt))
@@ -134,7 +135,7 @@ export class WebhookWorker {
         errorMessage: err.message,
         durationMs: 0,
         nextAttemptAt
-      }).catch(e => console.error('[Worker] Failed to record error outcome:', e));
+      }).catch(e => logger.addLog('Worker', `Failed to record error outcome: ${e.message}`, 'error'));
     } finally {
       rateLimiter.release(host);
     }

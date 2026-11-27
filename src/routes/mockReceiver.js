@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { logger } from '../services/logger.js';
 
 const router = Router();
 const failCounts = new Map();
@@ -13,8 +14,8 @@ router.post('/receiver', async (req, res) => {
   const attempt = req.headers['x-webhook-attempt'] || '1';
   const mode = String(req.query.mode || 'ok').toLowerCase();
 
-  console.log(`[Receiver] 📥 Received webhook for event '${eventId}' (Attempt #${attempt}, Job: ${jobId})`);
-  console.log(`[Receiver] 📦 Payload:`, JSON.stringify(req.body));
+  logger.addLog('Receiver', `📥 [Destination Hit] Received Webhook! Event: '${eventId}' (Attempt #${attempt})`);
+  logger.addLog('Receiver', `📦 Payload: ${JSON.stringify(req.body)}`);
 
   // Optional simulation mode for retry testing (?mode=fail500&failTimes=2)
   if (mode === 'fail500') {
@@ -24,7 +25,7 @@ router.post('/receiver', async (req, res) => {
     failCounts.set(key, count);
 
     if (count <= failTimes) {
-      console.log(`[Receiver] 💥 Simulating 500 Server Error (${count}/${failTimes}) for event '${eventId}'`);
+      logger.addLog('Receiver', `💥 [Destination Answer] Returned HTTP 500 Server Error (${count}/${failTimes}) for event '${eventId}'`, 'error');
       return res.status(500).json({
         status: 'error',
         message: `Simulated 500 error (${count}/${failTimes})`,
@@ -38,11 +39,11 @@ router.post('/receiver', async (req, res) => {
   // Slow mode simulation (?mode=slow&delay=3000)
   if (mode === 'slow') {
     const delay = parseInt(req.query.delay || '3000', 10);
-    console.log(`[Receiver] ⏳ Sleeping ${delay}ms before responding...`);
+    logger.addLog('Receiver', `⏳ [Destination Delay] Sleeping ${delay}ms before responding...`);
     await new Promise(r => setTimeout(r, delay));
   }
 
-  console.log(`[Receiver] ✅ Responding 200 OK for event '${eventId}'`);
+  logger.addLog('Receiver', `✅ [Destination Answer] Returned HTTP 200 OK for event '${eventId}'`);
   return res.status(200).json({
     status: 'received',
     message: 'Webhook received successfully by destination server',
