@@ -40,16 +40,16 @@ THE 2 CORE APIS:
 curl -X POST "${baseUrl}/api/webhooks/dispatch" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "eventId": "evt_'$(date +%s)'",
+    "eventId": "evt_test_101",
     "destinationUrl": "${baseUrl}/api/mock/receiver",
-    "payload": { "event": "order.completed", "amount": 99.99 }
+    "payload": { "event": "payment.succeeded", "amount": 149.00 }
   }'
 
 2. TEST THE RECEIVER DIRECTLY (HTTP 200 OK)
 --------------------------------------------------------------------------------
 curl -X POST "${baseUrl}/api/mock/receiver" \\
   -H "Content-Type: application/json" \\
-  -d '{ "ping": "pong", "time": "'$(date)'" }'
+  -d '{ "ping": "pong" }'
 ================================================================================
 `.trimStart();
 
