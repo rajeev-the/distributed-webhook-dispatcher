@@ -102,10 +102,18 @@ export async function deliverWebhook({ destinationUrl, eventId, jobId, attemptNu
     responseCode = response.status;
     retryAfterHeader = response.headers.get('retry-after');
 
+    const text = await response.text().catch(() => '');
     if (!response.ok) {
-      const text = await response.text().catch(() => '');
       errorMessage = `HTTP ${response.status} ${response.statusText}${text ? `: ${text.slice(0, 200)}` : ''}`;
     }
+
+    return {
+      responseCode,
+      responseBody: text,
+      errorMessage,
+      durationMs: Date.now() - startedAt,
+      retryAfterHeader
+    };
   } catch (err) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
@@ -113,13 +121,13 @@ export async function deliverWebhook({ destinationUrl, eventId, jobId, attemptNu
     } else {
       errorMessage = err.message || 'Network delivery error';
     }
-  }
 
-  const durationMs = Date.now() - startedAt;
-  return {
-    responseCode,
-    errorMessage,
-    durationMs,
-    retryAfterHeader
-  };
+    return {
+      responseCode,
+      responseBody: null,
+      errorMessage,
+      durationMs: Date.now() - startedAt,
+      retryAfterHeader
+    };
+  }
 }

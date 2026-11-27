@@ -83,7 +83,7 @@ export class WebhookWorker {
 
     try {
       // Perform webhook HTTP dispatch
-      const { responseCode, errorMessage, durationMs, retryAfterHeader } = await deliverWebhook({
+      const { responseCode, responseBody, errorMessage, durationMs, retryAfterHeader } = await deliverWebhook({
         destinationUrl: job.destination_url,
         eventId: job.event_id,
         jobId: job.id,
@@ -106,7 +106,8 @@ export class WebhookWorker {
         nextAttemptAt = new Date(Date.now() + backoffMs);
         logger.addLog('Worker', `🔄 Job ${job.id} RETRYING in ${backoffMs}ms (HTTP ${responseCode || errorMessage}) [Attempt ${currentAttempt}/${job.max_attempts}]`, 'warn');
       } else if (outcome.status === 'succeeded') {
-        logger.addLog('Worker', `✅ Job ${job.id} SUCCEEDED (HTTP ${responseCode}) in ${durationMs}ms`);
+        const preview = responseBody ? ` | Response: ${responseBody.slice(0, 160)}` : '';
+        logger.addLog('Worker', `✅ Job ${job.id} SUCCEEDED (HTTP ${responseCode}) in ${durationMs}ms${preview}`);
       } else {
         logger.addLog('Worker', `❌ Job ${job.id} FAILED PERMANENTLY (${outcome.reason}) in ${durationMs}ms`, 'error');
       }

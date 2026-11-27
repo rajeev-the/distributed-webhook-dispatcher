@@ -49,7 +49,7 @@ router.post('/dispatch', async (req, res, next) => {
 
     // Check idempotency: is_new indicates if row was newly inserted
     if (!job.is_new) {
-      logger.addLog('Ingestion', `⚠️ Duplicate event '${eventId}' detected. Returning existing job ${job.id} (Status: ${job.status})`, 'warn');
+      logger.addLog('Ingestion', `⚠️ Duplicate event '${eventId}' detected (HTTP 200). Returning existing job ${job.id} (Current status: ${job.status})`, 'warn');
       return res.status(200).json({
         message: 'Duplicate event detected. Existing job returned.',
         jobId: job.id,
@@ -60,7 +60,7 @@ router.post('/dispatch', async (req, res, next) => {
       });
     }
 
-    logger.addLog('Ingestion', `📥 Webhook accepted & queued: Job ${job.id} | Event: '${eventId}' -> ${validated.url}`);
+    logger.addLog('Ingestion', `📥 Webhook accepted & queued (HTTP 202): Job ${job.id} | Event: '${eventId}' -> ${validated.url} | Payload: ${JSON.stringify(payload)}`);
     return res.status(202).json({
       message: 'Webhook accepted and queued for delivery',
       jobId: job.id,
