@@ -1,7 +1,8 @@
 import http from 'http';
 import { URL } from 'url';
 
-const PORT = parseInt(process.argv[2] || process.env.RECEIVER_PORT || '5000', 10);
+const DEFAULT_PORT = 4000;
+let PORT = parseInt(process.argv[2] || process.env.RECEIVER_PORT || String(DEFAULT_PORT), 10);
 
 // In-memory store for all received webhooks
 const receivedLog = [];
@@ -162,12 +163,28 @@ const server = http.createServer(async (req, res) => {
   sendJson(404, { error: 'Not Found' });
 });
 
-server.listen(PORT, () => {
-  console.log('========================================================');
-  console.log(`📡 EXTERNAL TEST RECEIVER SERVER RUNNING ON PORT ${PORT}`);
-  console.log(`👉 Webhook URL:    http://localhost:${PORT}/webhook`);
-  console.log(`👉 View Received:  http://localhost:${PORT}/received`);
-  console.log(`👉 Flaky (Retry):  http://localhost:${PORT}/webhook/flaky?failTimes=2`);
-  console.log(`👉 Slow Endpoint:  http://localhost:${PORT}/webhook/slow?delay=3000`);
-  console.log('========================================================\n');
+function startServer(portToTry) {
+  server.listen(portToTry, () => {
+    PORT = portToTry;
+    console.log('========================================================');
+    console.log(`📡 EXTERNAL TEST RECEIVER SERVER RUNNING ON PORT ${PORT}`);
+    console.log(`👉 Webhook URL:    http://localhost:${PORT}/webhook`);
+    console.log(`👉 View Received:  http://localhost:${PORT}/received`);
+    console.log(`👉 Flaky (Retry):  http://localhost:${PORT}/webhook/flaky?failTimes=2`);
+    console.log(`👉 Slow Endpoint:  http://localhost:${PORT}/webhook/slow?delay=3000`);
+    console.log('========================================================\n');
+  });
+}
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.warn(`[Test Receiver] Port ${PORT} is busy, trying port ${PORT + 1}...`);
+    PORT += 1;
+    startServer(PORT);
+  } else {
+    console.error('[Test Receiver Error]', err);
+    process.exit(1);
+  }
 });
+
+startServer(PORT);
