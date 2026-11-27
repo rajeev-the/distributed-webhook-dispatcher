@@ -7,7 +7,7 @@
 set -e
 
 PORT="${PORT:-3000}"
-BASE_URL="http://localhost:${PORT}"
+BASE_URL="${BASE_URL:-http://localhost:${PORT}}"
 
 echo "========================================================================"
 echo "🎯 DISTRIBUTED WEBHOOK DISPATCHER - LIVE VERIFICATION"
