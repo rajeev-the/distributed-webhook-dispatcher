@@ -2,260 +2,293 @@
 
 A robust, production-ready, distributed webhook delivery system built with **Node.js**, **Express**, and **PostgreSQL**.
 
-The dispatcher implements asynchronous non-blocking ingestion (immediate `202 Accepted`), durable transactional queuing via PostgreSQL `FOR UPDATE SKIP LOCKED`, per-destination rate limiting and concurrency throttling, exponential backoff retries with jitter, crash-recovery visibility timeouts, and comprehensive observability.
+The dispatcher implements asynchronous non-blocking ingestion (immediate `202 Accepted`), durable transactional queuing via PostgreSQL `FOR UPDATE SKIP LOCKED`, per-destination rate limiting and concurrency throttling, exponential backoff retries with jitter, crash-recovery visibility timeouts, and a real-time streaming console log feed.
 
 ---
 
-## 🚀 Quickstart (60 Seconds)
+## 🌐 Live Service & Real-Time Log Feed
 
-### 1. Prerequisites
-- **Node.js** (v18+ or v20+)
-- **PostgreSQL** (Local instance, or free cloud Postgres from [Neon](https://neon.tech) / [Supabase](https://supabase.com))
+- **Live Base URL**: [https://distributed-webhook-dispatcher-unjr.onrender.com/](https://distributed-webhook-dispatcher-unjr.onrender.com/)
 
-### 2. Setup & Installation
-```bash
-# Clone and enter directory
-cd assignemnet_2
-
-# Install dependencies
-npm install
-
-# Configure environment (defaults connect to postgresql://localhost:5432/webhook_dispatcher)
-cp .env.example .env
-
-# Run database migrations
-npm run migrate
-```
-
-### 3. Start the Dispatcher & Worker
-```bash
-npm start
-```
-
-### 4. Run Automated Tests
-```bash
-npm test
-```
-
-### 5. Run Live End-to-End Curl Demo
-In a separate terminal while the server is running:
-```bash
-npm run demo
-```
+> **Live Console View:** Open the base URL in any web browser. It displays a real-time, streaming console UI (via Server-Sent Events) that logs every incoming dispatch, background worker attempt, and destination receiver response live as events occur.
 
 ---
 
-## 🏛️ Architecture & System Design
+## 📊 System Flowchart (End-to-End Lifecycle)
+
+### High-Level Architecture Flow
+
+```mermaid
+flowchart TD
+    Client(["Caller / External Client"]) -->|1. POST /api/webhooks/dispatch| Ingest["Ingestion Layer (Express)"]
+    Ingest -->|2. Check Unique Idempotency Key| Idemp{"Duplicate Event?"}
+    
+    Idemp -->|Yes| RetDup["Return HTTP 200 OK (Existing Job)"]
+    RetDup --> Client
+    
+    Idemp -->|No| Enqueue[("PostgreSQL Queue (webhook_jobs)\nstatus = 'queued'")]
+    Enqueue --> FastResp["Return HTTP 202 Accepted (Instant < 50ms)"]
+    FastResp --> Client
+
+    subgraph Background Delivery Engine
+        Worker["Modular Background Worker"] -->|3. Claim Due Jobs\nFOR UPDATE SKIP LOCKED| Enqueue
+        Worker --> RateLimit{"Host Rate Limiter & Concurrency Gate"}
+        RateLimit -->|Exceeded / Saturated| Reschedule["Reschedule Job for Next Refill"]
+        RateLimit -->|Slot Granted| Dispatch["HTTP POST Delivery (5s Timeout)"]
+        
+        Dispatch --> Dest["Destination Endpoint\n(/api/mock/receiver)"]
+        Dest --> Result{"HTTP Response"}
+        
+        Result -->|HTTP 2xx| Success["Mark status = 'succeeded'"]
+        Result -->|HTTP 4xx (Client Error)| FailPermanent["Mark status = 'failed' (No Retry)"]
+        Result -->|HTTP 5xx / 429 / Timeout| RetryCheck{"Attempt < 4?"}
+        
+        RetryCheck -->|Yes| Backoff["Exponential Backoff (2^n s + Jitter)\nstatus = 'retrying'"]
+        RetryCheck -->|No| DLQ["Dead-Letter State\nstatus = 'failed'"]
+        
+        Success --> Attempts[("Insert delivery_attempts Record")]
+        FailPermanent --> Attempts
+        Backoff --> Attempts
+        DLQ --> Attempts
+    end
+
+    Background Delivery Engine -.->|Broadcast Live Logs| SSE["Real-Time SSE Stream (GET /)"]
+    SSE -.-> BrowserUI(["Browser Live Log Feed"])
+```
+
+### Text Flowchart
 
 ```
-                     ┌───────────────────────────────────────────────┐
-                     │          Distributed Webhook Dispatcher       │
-                     │                                               │
-Internal Service ────┼──POST /api/webhooks/dispatch──┐               │
-                     │                               ▼               │
-                     │                    [Input Validation / Zod]   │
-                     │                    [SSRF Guard / Host check]  │
-                     │                               │               │
-                     │                               ▼               │
-                     │   ┌─────────────────────────────────────────┐ │
-                     │   │     PostgreSQL Queue (webhook_jobs)     │ │
-                     │   │   - Idempotency UNIQUE(event, dest)     │ │
-                     │   │   - Index on (status, next_attempt_at)  │ │
-                     │   └─────────────────────────────────────────┘ │
-                     │                               │               │
-Caller ◄──202 (instant)──────────────────────────────┘               │
-                                                     │               │
-                                                     ▼               │
-                                        [FOR UPDATE SKIP LOCKED]     │
-                                                     │               │
-                                                     ▼               │
-                                  ┌────────────────────────────────┐ │
-                                  │   In-Process Modular Worker    │ │
-                                  │   (Visibility Timeout Recovery)│ │
-                                  └────────────────────────────────┘ │
-                                                     │               │
-                          ┌──────────────────────────┴───────────────┴───────────────┐
-                          │ Destination Host Rate Limiter & Concurrency Semaphore    │
-                          │   - Token Bucket: capacity=5, refill=2 tokens/s          │
-                          │   - Host Concurrency: max 2 in-flight simultaneously    │
-                          └──────────────────────────┬───────────────────────────────┘
-                                                     │
-                                                     ▼
-                                          [HTTP POST Delivery]
-                                          (5000ms strict timeout)
-                                                     │
-                           ┌─────────────────────────┴─────────────────────────┐
-                           ▼                                                   ▼
-                [Transient 5xx / 429 / Net]                         [Success 2xx / 4xx Fail]
-                           │                                                   │
-                           ▼                                                   ▼
-                Exponential Backoff (2s, 4s, 8s)                       Terminal Outcome
-                           │                                                   │
-                           └─────────────────────────┬─────────────────────────┘
-                                                     │
-                                                     ▼
-                                     ┌───────────────────────────────┐
-                                     │ delivery_attempts Table       │
-                                     │ (duration_ms, response_code)  │
-                                     └───────────────────────────────┘
+[Caller]
+   │
+   │ 1. POST /api/webhooks/dispatch
+   ▼
+[Ingestion API] ──── (Instant 202 Accepted) ────► [Caller Receives Job ID]
+   │
+   │ 2. Atomically insert into PostgreSQL (Idempotency checked)
+   ▼
+[PostgreSQL Queue] ◄─── (FOR UPDATE SKIP LOCKED) ───► [Background Worker]
+                                                              │
+                                                              │ 3. Rate Limit Check
+                                                              ▼
+                                                   [Rate Limiter & Concurrency]
+                                                              │
+                                                              │ 4. HTTP POST (5s Timeout)
+                                                              ▼
+                                                   [Destination Server]
+                                                              │
+                                ┌─────────────────────────────┴─────────────────────────────┐
+                                ▼                                                           ▼
+                    [Success (2xx)]                                            [Failure (5xx / 429 / Timeout)]
+                                │                                                           │
+                                ▼                                                           ▼
+                    Mark Job 'succeeded'                                       Calculate Exponential Backoff (2^n s)
+                                                                                            │
+                                                                                            ▼
+                                                                               Retry attempt (Up to 4 times)
 ```
 
 ---
 
-## 🔑 Key Engineering Decisions
+## 📡 Core API Reference
 
-### 1. PostgreSQL as the Queue (`FOR UPDATE SKIP LOCKED`)
-- **Single Dependency**: Eliminates the operational overhead of running Redis/RabbitMQ/Kafka alongside a relational DB.
-- **ACID Consistency**: The webhook job status, attempt logs, and queue state live in the same transactionally safe store.
-- **Fair Concurrent Claiming**: `FOR UPDATE SKIP LOCKED` allows multiple concurrent worker processes to pick jobs without lock contention or race conditions.
+### 1. Webhook Dispatch API
+Accepts incoming webhook events asynchronously and queues them for reliable delivery.
 
-### 2. In-Process Worker Architecture (`src/worker/`)
-- On free-tier cloud platforms (e.g., Render Web Services), separate background worker containers are not supported on the free tier.
-- The worker is implemented as a clean, decoupled module in `src/worker/worker.js`.
-- **Zero-Refactor Extraction**: To run the worker as a separate microservice, simply point a new entry point (`worker-service.js`) at `worker.start()` without changing a line of business logic.
+- **Endpoint**: `POST /api/webhooks/dispatch`
+- **Method**: `POST`
+- **Content-Type**: `application/json`
 
-### 3. Delivery Guarantees & Idempotency
-- **Guarantee**: **At-least-once delivery**. If a worker crashes mid-HTTP delivery, the visibility timeout reclaims the job for another attempt.
-- **Idempotency**: Webhook requests pass headers:
-  - `X-Webhook-Event-Id`: The upstream event ID for receiver deduplication.
-  - `X-Webhook-Job-Id`: The dispatcher's internal tracking UUID.
-  - `X-Webhook-Attempt`: Monotonically increasing attempt counter.
-- **Producer Deduplication**: A unique constraint on `(event_id, destination_url)` ensures duplicate dispatch calls return the existing `jobId` without duplicating delivery.
-
-### 4. Retry Semantics & Backoff Schedule
-
-| Failure Class | Status Codes | Action | Backoff Delay |
+#### Request Payload Parameters
+| Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
-| **Success** | `200 - 299` | Marked `succeeded` | None |
-| **Client Error** | `400, 401, 403, 404, 422` (except 429) | Marked `failed` permanently | **No retry** (malformed payloads won't fix themselves) |
-| **Server Error** | `500, 502, 503, 504` | Marked `retrying` | `2^n` seconds ($2s \to 4s \to 8s$) + 10% jitter |
-| **Downstream Rate Limit** | `429` | Marked `retrying` | Honors `Retry-After` header if present, else backoff |
-| **Network / Timeout** | `ECONNRESET`, `ETIMEDOUT`, socket abort | Marked `retrying` | Exponential backoff |
-| **Budget Exhaustion** | 4 total attempts exhausted | Marked `failed` (Dead-letter state) | None |
+| `eventId` | `string` | **Yes** | Unique event identifier for idempotency and deduplication (e.g. `evt_live_1002`). |
+| `destinationUrl` | `string` | **Yes** | Fully qualified HTTP or HTTPS destination endpoint. |
+| `payload` | `object` | **Yes** | Arbitrary JSON payload data delivered to the destination. |
 
----
-
-## 📡 API Reference
-
-### 1. Ingest Webhook (Non-Blocking)
-```http
-POST /api/webhooks/dispatch
-Content-Type: application/json
+#### Example `curl` Command
+```bash
+curl -X POST "https://distributed-webhook-dispatcher-unjr.onrender.com/api/webhooks/dispatch" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eventId": "evt_live_1002",
+    "destinationUrl": "https://distributed-webhook-dispatcher-unjr.onrender.com/api/mock/receiver",
+    "payload": {
+      "event": "payment.succeeded",
+      "amount": 149.00
+    }
+  }'
 ```
-```json
-{
-  "eventId": "evt_order_created_9876",
-  "destinationUrl": "http://localhost:3000/api/mock/receiver?mode=ok",
-  "payload": {
-    "orderId": "ord_9876",
-    "customer": "alex@example.com",
-    "amount": 149.50
-  }
-}
-```
-**Response (Instant 202 Accepted):**
+
+#### Responses
+
+- **First-time ingestion (HTTP 202 Accepted):**
 ```json
 {
   "message": "Webhook accepted and queued for delivery",
-  "jobId": "a7c9c441-f963-4264-8def-fdbaba546e08",
+  "jobId": "40116d5a-60f2-4f6f-8dfb-7082e238a92d",
   "status": "queued",
-  "eventId": "evt_order_created_9876",
-  "destinationUrl": "http://localhost:3000/api/mock/receiver?mode=ok",
+  "eventId": "evt_live_1002",
+  "destinationUrl": "https://distributed-webhook-dispatcher-unjr.onrender.com/api/mock/receiver",
   "isDuplicate": false
 }
 ```
 
----
-
-### 2. Inspect Job & Delivery Attempts
-```http
-GET /api/webhooks/jobs/:id
-```
-**Response (200 OK):**
+- **Duplicate submission (HTTP 200 OK — Idempotent):**
 ```json
 {
-  "id": "a7c9c441-f963-4264-8def-fdbaba546e08",
-  "event_id": "evt_order_created_9876",
-  "destination_url": "http://localhost:3000/api/mock/receiver?mode=ok",
-  "destination_host": "localhost",
+  "message": "Duplicate event detected. Existing job returned.",
+  "jobId": "40116d5a-60f2-4f6f-8dfb-7082e238a92d",
+  "status": "succeeded",
+  "eventId": "evt_live_1002",
+  "destinationUrl": "https://distributed-webhook-dispatcher-unjr.onrender.com/api/mock/receiver",
+  "isDuplicate": true
+}
+```
+
+---
+
+### 2. Job Status & Attempts Inspection API
+Inspects the live lifecycle state of any job, including its full audit trail of delivery attempts, response codes, latency, and error logs.
+
+- **Endpoint**: `GET /api/webhooks/jobs/:id`
+- **Method**: `GET`
+
+#### URL Parameters
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `:id` | `UUID` | **Yes** | The `jobId` returned from the dispatch endpoint. |
+
+#### Example `curl` Command
+```bash
+curl -X GET "https://distributed-webhook-dispatcher-unjr.onrender.com/api/webhooks/jobs/40116d5a-60f2-4f6f-8dfb-7082e238a92d"
+```
+
+#### Response (HTTP 200 OK)
+```json
+{
+  "id": "40116d5a-60f2-4f6f-8dfb-7082e238a92d",
+  "event_id": "evt_live_1002",
+  "destination_url": "https://distributed-webhook-dispatcher-unjr.onrender.com/api/mock/receiver",
+  "destination_host": "distributed-webhook-dispatcher-unjr.onrender.com",
   "status": "succeeded",
   "attempt_count": 1,
   "max_attempts": 4,
-  "created_at": "2026-11-27T09:28:52.436Z",
+  "created_at": "2026-11-27T17:47:08.123Z",
+  "updated_at": "2026-11-27T17:47:09.456Z",
   "attempts": [
     {
-      "id": "f55cb696-613d-4c31-8977-cf684bb64aa1",
+      "id": "a9d7e63b-189f-4315-bb82-99071350a41d",
       "attempt_number": 1,
       "status": "succeeded",
       "response_code": 200,
       "error_message": null,
-      "duration_ms": 12,
-      "started_at": "2026-11-27T09:28:52.500Z"
+      "duration_ms": 667,
+      "started_at": "2026-11-27T17:47:09.001Z"
     }
   ]
 }
 ```
 
----
-
-### 3. Built-in Controllable Mock Receiver
-The server includes `/api/mock/receiver` to test real worker behavior:
-* `POST /api/mock/receiver?mode=ok` -> returns `200 OK`.
-* `POST /api/mock/receiver?mode=slow&delay=4000` -> delays response by 4 seconds (proves non-blocking ingestion).
-* `POST /api/mock/receiver?mode=fail500&failTimes=2` -> returns `500` for the first 2 attempts, then succeeds on attempt 3.
-* `POST /api/mock/receiver?mode=429&retryAfter=2` -> returns `429 Too Many Requests` with `Retry-After: 2`.
-* `POST /api/mock/receiver?mode=client_error` -> returns `400 Bad Request` to demonstrate immediate permanent failure.
+#### Job Status Lifecycle Values
+- `queued`: Newly ingested, waiting for worker pickup.
+- `processing`: Claimed by a worker; active HTTP delivery in-flight.
+- `retrying`: Transient failure occurred; scheduled for next exponential backoff attempt.
+- `succeeded`: Terminal success (`HTTP 2xx` received from destination).
+- `failed`: Terminal failure (`HTTP 4xx` client error, or all 4 retry attempts exhausted).
 
 ---
 
-### 4. Health Check (Keep-Alive Ping)
-```http
-GET /health
-```
-```json
-{
-  "status": "healthy",
-  "database": "connected",
-  "workerRunning": true,
-  "activeDeliveries": 0,
-  "uptimeSeconds": 312
-}
-```
+### 3. Built-in Controllable Mock Receiver API
+A built-in webhook receiver endpoint to test deliveries, simulations, timeouts, and failure recovery.
 
----
+- **Endpoint**: `POST /api/mock/receiver`
+- **Method**: `POST`
+- **Content-Type**: `application/json`
 
-## 🛡️ Security Protections
-
-1. **SSRF Guard (`src/services/ssrfGuard.js`)**:
-   - Rejects non-HTTP(S) schemes (`file://`, `ftp://`).
-   - Resolves target hostnames and blocks connections to private IP ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, link-local `169.254.169.254`, and IPv6 loopbacks).
-   - Configurable via `ALLOW_INTERNAL_TARGETS=true` for local development and mock receiver tests.
-2. **Payload Protection**:
-   - Strict 256KB body parsing limit to prevent memory exhaustion attacks.
-3. **Timeout Safeguards**:
-   - Strict 5000ms AbortSignal timeout on all outgoing HTTP requests prevents hanging downstream connections from locking up worker slots.
-
----
-
-## 📈 Scaling to High Throughput (Interview Discussion)
-
-| Component | Current (Postgres Queue) | High Scale (~100,000 req/sec) |
+#### Query Parameters for Testing & Simulation
+| Query Param | Values / Format | Description |
 | :--- | :--- | :--- |
-| **Queue** | PostgreSQL `SKIP LOCKED` | **AWS SQS** or **Redis Streams** |
-| **Worker Placement** | In-process with Fastify/Express | Autoscaling worker fleet (K8s / ECS) |
-| **Rate Limiting** | In-memory token bucket per instance | Distributed **Redis + Lua script** bucket |
-| **Dead-Letter Queue** | `status = 'failed'` in PostgreSQL | Dedicated DLQ with administrative replay API |
-| **Signatures** | Ready for HMAC header | `X-Webhook-Signature: t=...,v1=hmac_sha256(...)` |
+| `mode` | `ok` *(default)* | Responds with immediate `HTTP 200 OK`. |
+| `mode` | `fail500` | Returns `HTTP 500 Internal Server Error`. Combine with `failTimes` to test retries. |
+| `failTimes` | `integer` (e.g. `2`) | Fails the first `N` attempts with `500`, then returns `200` on the `(N+1)`th attempt. |
+| `mode` | `slow` | Delays response. Combine with `delay` to simulate slow endpoints or timeouts. |
+| `delay` | `milliseconds` (e.g. `3000`) | Number of milliseconds to delay the response before returning `200`. |
+| `mode` | `429` | Returns `HTTP 429 Too Many Requests` (honoring `retryAfter` if set). |
+| `retryAfter` | `seconds` (e.g. `2`) | Adds `Retry-After: 2` header to `429` response. |
+| `mode` | `client_error` | Returns `HTTP 400 Bad Request` (proves immediate failure without unnecessary retries). |
+
+#### Example: Direct Test of Receiver
+```bash
+curl -X POST "https://distributed-webhook-dispatcher-unjr.onrender.com/api/mock/receiver" \
+  -H "Content-Type: application/json" \
+  -d '{ "ping": "pong" }'
+```
+
+#### Example: Testing 2-Time Failure With Automatic Retry Recovery
+```bash
+curl -X POST "https://distributed-webhook-dispatcher-unjr.onrender.com/api/webhooks/dispatch" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eventId": "evt_test_retry_01",
+    "destinationUrl": "https://distributed-webhook-dispatcher-unjr.onrender.com/api/mock/receiver?mode=fail500&failTimes=2",
+    "payload": { "orderId": 999 }
+  }'
+```
 
 ---
 
-## 🧪 Interview Questions & Answers
+## 🔑 Key Architectural Features
 
-**Q: Why Postgres instead of Redis/BullMQ?**  
-*A: For an initial distributed system, Postgres gives ACID transactional durability with zero external dependencies. The queue, attempt history, and job status are updated atomically. If the system restarts or crashes, no data is lost.*
+1. **Transactional PostgreSQL Queue (`FOR UPDATE SKIP LOCKED`)**:
+   - Zero external message broker dependencies (no Redis/RabbitMQ required).
+   - Atomic job state transitions and concurrent worker safety without lock contention.
 
-**Q: What delivery guarantee does this system provide?**  
-*A: At-least-once delivery. If an attempt is sent but the worker crashes before recording the DB outcome, the 30-second visibility timeout reclaims the job. Downstream clients should use the provided `X-Webhook-Event-Id` header to deduplicate.*
+2. **Strict Per-Destination Rate Limiting & Concurrency Control**:
+   - In-memory **Token Bucket** per target hostname (capacity: 5 tokens, refill: 2 tokens/s).
+   - Concurrency semaphore (max 2 concurrent in-flight requests per host) prevents overwhelming receivers.
 
-**Q: What happens if a downstream host rate limits us?**  
-*A: When our token bucket or host concurrency cap is reached, or when the destination returns HTTP 429, the job is rescheduled in the future without consuming an attempt budget.*
+3. **Exponential Backoff with Full Jitter**:
+   - Retry delays: $2^n$ seconds ($2s \to 4s \to 8s$) with a random $\pm 10\%$ jitter factor.
+   - Non-retryable `4xx` responses are immediately marked `failed` to prevent wasted compute.
+
+4. **Crash-Recovery Visibility Timeout**:
+   - Jobs in `processing` state for longer than 30 seconds (due to server reboot or container migration) are automatically recovered and rescheduled.
+
+5. **SSRF Guard & Security**:
+   - Strict protocol enforcement (`http:` and `https:` only).
+   - Blocks internal/private IP ranges (`127.0.0.0/8`, `10.0.0.0/8`, `169.254.0.0/16`, etc.) when `ALLOW_INTERNAL_TARGETS` is disabled.
+   - Strict 5000ms request timeout via `AbortSignal`.
+
+---
+
+## 💻 Local Development Setup
+
+### 1. Installation
+```bash
+git clone https://github.com/rajeev-the/distributed-webhook-dispatcher.git
+cd distributed-webhook-dispatcher
+npm install
+```
+
+### 2. Environment Configuration
+Create a `.env` file based on `.env.example`:
+```env
+PORT=3000
+DATABASE_URL=postgresql://user:password@localhost:5432/webhook_dispatcher?sslmode=disable
+ALLOW_INTERNAL_TARGETS=true
+```
+
+### 3. Run Migrations & Start
+```bash
+# Run database schema migration
+npm run migrate
+
+# Start server and background worker
+npm start
+```
+
+### 4. Run Test Suite
+```bash
+npm test
+```
