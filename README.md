@@ -16,48 +16,6 @@ The dispatcher implements asynchronous non-blocking ingestion (immediate `202 Ac
 
 ## 📊 System Flowchart (End-to-End Lifecycle)
 
-### High-Level Architecture Flow
-
-```mermaid
-flowchart TD
-    Client(["Caller / External Client"]) -->|1. POST /api/webhooks/dispatch| Ingest["Ingestion Layer - Express"]
-    Ingest -->|2. Check Unique Idempotency Key| Idemp{"Duplicate Event?"}
-    
-    Idemp -->|Yes| RetDup["Return HTTP 200 OK - Existing Job"]
-    RetDup --> Client
-    
-    Idemp -->|No| Enqueue[("PostgreSQL Queue - webhook_jobs")]
-    Enqueue --> FastResp["Return HTTP 202 Accepted - Instant"]
-    FastResp --> Client
-
-    subgraph Engine ["Background Delivery Engine"]
-        Worker["Modular Background Worker"] -->|3. Claim Due Jobs SKIP LOCKED| Enqueue
-        Worker --> RateLimit{"Host Rate Limiter and Concurrency Gate"}
-        RateLimit -->|Exceeded or Saturated| Reschedule["Reschedule Job for Next Refill"]
-        RateLimit -->|Slot Granted| Dispatch["HTTP POST Delivery - 5s Timeout"]
-        
-        Dispatch --> Dest["Destination Endpoint - /api/mock/receiver"]
-        Dest --> Result{"HTTP Response"}
-        
-        Result -->|HTTP 2xx| Success["Mark status = succeeded"]
-        Result -->|HTTP 4xx Client Error| FailPermanent["Mark status = failed - No Retry"]
-        Result -->|HTTP 5xx or 429 or Timeout| RetryCheck{"Attempts remaining?"}
-        
-        RetryCheck -->|Yes - Retry| Backoff["Exponential Backoff - status = retrying"]
-        RetryCheck -->|No - Exhausted| DLQ["Dead-Letter State - status = failed"]
-        
-        Success --> Attempts[("Insert delivery_attempts Record")]
-        FailPermanent --> Attempts
-        Backoff --> Attempts
-        DLQ --> Attempts
-    end
-
-    Worker -.->|Broadcast Live Logs| SSE["Real-Time SSE Stream - GET /"]
-    SSE -.-> BrowserUI(["Browser Live Log Feed"])
-```
-
-### Text Flowchart
-
 ```
 [Caller]
    │
