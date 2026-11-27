@@ -9,7 +9,9 @@ const router = Router();
 const dispatchSchema = z.object({
   eventId: z.string().trim().min(1, 'eventId cannot be empty'),
   destinationUrl: z.string().trim().url('destinationUrl must be a valid URL'),
-  payload: z.record(z.any(), { required_error: 'payload must be a valid JSON object' })
+  payload: z.any().refine(val => val !== undefined && val !== null, {
+    message: 'payload must be a valid JSON value'
+  })
 });
 
 /**
