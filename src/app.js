@@ -50,18 +50,6 @@ curl -X POST "${baseUrl}/api/webhooks/dispatch" \\
 curl -X POST "${baseUrl}/api/mock/receiver" \\
   -H "Content-Type: application/json" \\
   -d '{ "ping": "pong", "time": "'$(date)'" }'
-
---------------------------------------------------------------------------------
-INSPECTION & VERIFICATION COMMANDS:
-
-• Inspect Job Status & Attempts:
-  curl -s "${baseUrl}/api/webhooks/jobs/<JOB_ID>"
-
-• List Recent Jobs:
-  curl -s "${baseUrl}/api/webhooks/jobs?limit=10"
-
-• Health & Uptime Check:
-  curl -s "${baseUrl}/health"
 ================================================================================
 `.trimStart();
 
