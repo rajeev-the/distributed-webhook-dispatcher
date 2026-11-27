@@ -1,3 +1,4 @@
+import './dnsFallback.js';
 import { pool } from './index.js';
 
 export async function runMigrations() {
