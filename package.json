@@ -1,0 +1,32 @@
+{
+  "name": "distributed-webhook-dispatcher",
+  "version": "1.0.0",
+  "description": "Durable, non-blocking distributed webhook dispatcher with rate limiting and exponential backoff",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "migrate": "node src/db/migrate.js",
+    "test": "node --test tests/*.test.js",
+    "demo": "bash scripts/demo.sh"
+  },
+  "keywords": [
+    "webhook",
+    "queue",
+    "postgres",
+    "rate-limiter",
+    "worker"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.13.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "supertest": "^7.0.0"
+  }
+}
