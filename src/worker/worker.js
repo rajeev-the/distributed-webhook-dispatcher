@@ -49,6 +49,7 @@ export class WebhookWorker {
       // 2. Claim due jobs with FOR UPDATE SKIP LOCKED
       const jobs = await queueService.claimJobs(config.workerBatchSize);
       if (jobs.length > 0) {
+        console.log(`[Worker] Claimed ${jobs.length} due job(s) for delivery.`);
         for (const job of jobs) {
           // Process concurrently within node's event loop
           const dispatchPromise = this.processJob(job);
@@ -71,11 +72,13 @@ export class WebhookWorker {
     if (!permission.allowed) {
       // Throttled: reschedule job shortly without consuming attempt count
       const delayMs = permission.retryAfterMs || 500;
+      console.log(`[Worker] ⏳ Rate limit / concurrency cap reached for ${host}. Rescheduling job ${job.id} in ${delayMs}ms (0 attempts burned).`);
       await queueService.rescheduleJob(job.id, delayMs);
       return;
     }
 
     const currentAttempt = job.attempt_count + 1;
+    console.log(`[Worker] 🚀 Attempt ${currentAttempt}/${job.max_attempts} for job ${job.id} (Event: '${job.event_id}') -> ${job.destination_url}`);
 
     try {
       // Perform webhook HTTP dispatch
@@ -96,9 +99,15 @@ export class WebhookWorker {
       );
 
       let nextAttemptAt = null;
+      let backoffMs = 0;
       if (outcome.status === 'retrying') {
-        const backoffMs = calculateBackoffMs(currentAttempt, retryAfterHeader);
+        backoffMs = calculateBackoffMs(currentAttempt, retryAfterHeader);
         nextAttemptAt = new Date(Date.now() + backoffMs);
+        console.log(`[Worker] 🔄 Job ${job.id} RETRYING in ${backoffMs}ms (HTTP ${responseCode || errorMessage}) [Attempt ${currentAttempt}/${job.max_attempts}]`);
+      } else if (outcome.status === 'succeeded') {
+        console.log(`[Worker] ✅ Job ${job.id} SUCCEEDED (HTTP ${responseCode}) in ${durationMs}ms`);
+      } else {
+        console.log(`[Worker] ❌ Job ${job.id} FAILED PERMANENTLY (${outcome.reason}) in ${durationMs}ms`);
       }
 
       await queueService.recordAttemptOutcome({
