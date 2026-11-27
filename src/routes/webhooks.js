@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { queueService } from '../services/queue.js';
 import { validateDestinationUrl } from '../services/ssrfGuard.js';
+import { logger } from '../services/logger.js';
 
 const router = Router();
 
@@ -48,7 +49,7 @@ router.post('/dispatch', async (req, res, next) => {
 
     // Check idempotency: is_new indicates if row was newly inserted
     if (!job.is_new) {
-      console.log(`[Ingestion] ⚠️ Duplicate event '${eventId}' detected. Returning existing job ${job.id} (Status: ${job.status})`);
+      logger.addLog('Ingestion', `⚠️ Duplicate event '${eventId}' detected. Returning existing job ${job.id} (Status: ${job.status})`, 'warn');
       return res.status(200).json({
         message: 'Duplicate event detected. Existing job returned.',
         jobId: job.id,
@@ -59,7 +60,7 @@ router.post('/dispatch', async (req, res, next) => {
       });
     }
 
-    console.log(`[Ingestion] 📥 Webhook accepted & queued: Job ${job.id} | Event: '${eventId}' -> ${validated.url}`);
+    logger.addLog('Ingestion', `📥 Webhook accepted & queued: Job ${job.id} | Event: '${eventId}' -> ${validated.url}`);
     return res.status(202).json({
       message: 'Webhook accepted and queued for delivery',
       jobId: job.id,
@@ -89,7 +90,7 @@ router.get('/jobs/:id', async (req, res, next) => {
       });
     }
 
-    console.log(`[API] 🔍 Job ${id} inspected -> Status: ${job.status} (${job.attempts.length} attempts recorded)`);
+    logger.addLog('API', `🔍 Job ${id} inspected -> Status: ${job.status} (${job.attempts.length} attempts recorded)`);
     return res.status(200).json(job);
   } catch (err) {
     next(err);
