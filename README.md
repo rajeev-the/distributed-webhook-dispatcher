@@ -30,7 +30,7 @@ flowchart TD
     Enqueue --> FastResp["Return HTTP 202 Accepted - Instant"]
     FastResp --> Client
 
-    subgraph Background Delivery Engine
+    subgraph Engine ["Background Delivery Engine"]
         Worker["Modular Background Worker"] -->|3. Claim Due Jobs SKIP LOCKED| Enqueue
         Worker --> RateLimit{"Host Rate Limiter and Concurrency Gate"}
         RateLimit -->|Exceeded or Saturated| Reschedule["Reschedule Job for Next Refill"]
@@ -52,7 +52,7 @@ flowchart TD
         DLQ --> Attempts
     end
 
-    Background Delivery Engine -.->|Broadcast Live Logs| SSE["Real-Time SSE Stream - GET /"]
+    Worker -.->|Broadcast Live Logs| SSE["Real-Time SSE Stream - GET /"]
     SSE -.-> BrowserUI(["Browser Live Log Feed"])
 ```
 
