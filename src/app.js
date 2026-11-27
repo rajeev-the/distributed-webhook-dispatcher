@@ -263,6 +263,7 @@ curl -s "${baseUrl}/health"
     .time { color: #64748b; margin-right: 0.5rem; }
     .cat-Worker { color: #38bdf8; font-weight: 700; margin-right: 0.4rem; }
     .cat-Ingestion { color: #818cf8; font-weight: 700; margin-right: 0.4rem; }
+    .cat-Receiver { color: #34d399; font-weight: 700; margin-right: 0.4rem; }
     .cat-HTTP { color: #a78bfa; font-weight: 700; margin-right: 0.4rem; }
     .cat-SYSTEM { color: #fbbf24; font-weight: 700; margin-right: 0.4rem; }
     .level-error { color: #f87171 !important; }
