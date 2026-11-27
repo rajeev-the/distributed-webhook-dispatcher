@@ -1,7 +1,7 @@
 import http from 'http';
 import { URL } from 'url';
 
-const PORT = parseInt(process.env.RECEIVER_PORT || '4000', 10);
+const PORT = parseInt(process.argv[2] || process.env.RECEIVER_PORT || '5000', 10);
 
 // In-memory store for all received webhooks
 const receivedLog = [];
